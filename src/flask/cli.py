@@ -117,7 +117,7 @@ def _call_factory_with_args(
     app_factory: t.Callable[..., t.Any],
     *,
     error_message: str,
-    args: tuple[t.Any, ...] = (),
+    args: t.Iterable[t.Any] = (),
     kwargs: dict[str, t.Any] | None = None,
 ) -> t.Any:
     """Call an app factory and normalize wrong-argument TypeError handling."""
@@ -198,7 +198,7 @@ def find_app_by_string(module: ModuleType, app_name: str) -> Flask:
                 f" {module.__name__!r} could not be called with the"
                 " specified arguments."
             ),
-            args=tuple(args),
+            args=args,
             kwargs=kwargs,
         )
     else:
