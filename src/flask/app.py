@@ -1240,7 +1240,8 @@ class Flask(App):
     def _unpack_response_tuple(
         self, rv: ft.ResponseReturnValue
     ) -> tuple[ft.ResponseReturnValue, int | None, HeadersValue | None]:
-        # Refactoring type: Extract Method. Isolated tuple-unpacking branch from make_response().
+        # Refactoring type: Extract Method.
+        # Isolated tuple-unpacking branch from make_response().
         status: int | None = None
         headers: HeadersValue | None = None
 
@@ -1272,7 +1273,8 @@ class Flask(App):
         status: int | None,
         headers: HeadersValue | None,
     ) -> tuple[Response, int | None, HeadersValue | None]:
-        # Refactoring type: Extract Method. Isolated response coercion strategy chain from make_response().
+        # Refactoring type: Extract Method.
+        # Isolated response coercion strategy chain from make_response().
         if rv is None:
             raise TypeError(
                 f"The view function for {request.endpoint!r} did not"

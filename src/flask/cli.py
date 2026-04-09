@@ -120,7 +120,8 @@ def _call_factory_with_args(
     args: tuple[t.Any, ...] = (),
     kwargs: dict[str, t.Any] | None = None,
 ) -> t.Any:
-    # Refactoring type: Extract Method. Centralized duplicated factory-call error handling.
+    # Refactoring type: Extract Method.
+    # Centralized duplicated factory-call error handling.
     if kwargs is None:
         kwargs = {}
 
