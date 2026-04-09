@@ -524,8 +524,7 @@ def send_file(
 
     .. versionadded:: 0.2
     """
-    # Refactoring type: Simplify Data Flow. Removed redundant `environ` forwarding;
-    # `_prepare_send_file_kwargs` always provides request environ from context.
+    # Refactoring type: Simplify Data Flow. Removed redundant environ forwarding.
     return werkzeug.utils.send_file(  # type: ignore[return-value]
         **_prepare_send_file_kwargs(
             path_or_file=path_or_file,
