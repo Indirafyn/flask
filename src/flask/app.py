@@ -629,6 +629,55 @@ class Flask(App):
             rv.update(processor())
         return rv
 
+    def _configure_run_debug(
+        self, *, load_dotenv: bool, debug: bool | None
+    ) -> None:
+        """Resolve debug state for ``run`` from dotenv/env and explicit argument."""
+        # Refactoring type: Extract Method. Isolated debug resolution for run().
+        if get_load_dotenv(load_dotenv):
+            cli.load_dotenv()
+
+            # if set, env var overrides existing value
+            if "FLASK_DEBUG" in os.environ:
+                self.debug = get_debug_flag()
+
+        # debug passed to method overrides all other sources
+        if debug is not None:
+            self.debug = bool(debug)
+
+    def _resolve_run_host_port(
+        self, host: str | None, port: int | None
+    ) -> tuple[str, int]:
+        """Resolve host and port defaults for ``run`` using SERVER_NAME fallback."""
+        # Refactoring type: Extract Method. Isolated host/port selection for run().
+        server_name = self.config.get("SERVER_NAME")
+        sn_host = sn_port = None
+
+        if server_name:
+            sn_host, _, sn_port = server_name.partition(":")
+
+        if not host:
+            if sn_host:
+                host = sn_host
+            else:
+                host = "127.0.0.1"
+
+        if port or port == 0:
+            port = int(port)
+        elif sn_port:
+            port = int(sn_port)
+        else:
+            port = 5000
+
+        return host, port
+
+    def _set_run_defaults(self, options: dict[str, t.Any]) -> None:
+        """Apply default development server options for ``run``."""
+        # Refactoring type: Extract Method. Isolated default server options for run().
+        options.setdefault("use_reloader", self.debug)
+        options.setdefault("use_debugger", self.debug)
+        options.setdefault("threaded", True)
+
     def run(
         self,
         host: str | None = None,
@@ -706,39 +755,9 @@ class Flask(App):
 
             return
 
-        if get_load_dotenv(load_dotenv):
-            cli.load_dotenv()
-
-            # if set, env var overrides existing value
-            if "FLASK_DEBUG" in os.environ:
-                self.debug = get_debug_flag()
-
-        # debug passed to method overrides all other sources
-        if debug is not None:
-            self.debug = bool(debug)
-
-        server_name = self.config.get("SERVER_NAME")
-        sn_host = sn_port = None
-
-        if server_name:
-            sn_host, _, sn_port = server_name.partition(":")
-
-        if not host:
-            if sn_host:
-                host = sn_host
-            else:
-                host = "127.0.0.1"
-
-        if port or port == 0:
-            port = int(port)
-        elif sn_port:
-            port = int(sn_port)
-        else:
-            port = 5000
-
-        options.setdefault("use_reloader", self.debug)
-        options.setdefault("use_debugger", self.debug)
-        options.setdefault("threaded", True)
+        self._configure_run_debug(load_dotenv=load_dotenv, debug=debug)
+        host, port = self._resolve_run_host_port(host, port)
+        self._set_run_defaults(options)
 
         cli.show_server_banner(self.debug, self.name)
 
@@ -1221,6 +1240,94 @@ class Flask(App):
 
         return rv
 
+    def _unpack_response_tuple(
+        self, rv: ft.ResponseReturnValue
+    ) -> tuple[ft.ResponseReturnValue, int | None, HeadersValue | None]:
+        """Unpack a response tuple into body, status, and headers parts."""
+        # Refactoring type: Extract Method.
+        # Isolated tuple-unpacking branch from make_response().
+        status: int | None = None
+        headers: HeadersValue | None = None
+
+        if isinstance(rv, tuple):
+            len_rv = len(rv)
+
+            # a 3-tuple is unpacked directly
+            if len_rv == 3:
+                rv, status, headers = rv  # type: ignore[misc]
+            # decide if a 2-tuple has status or headers
+            elif len_rv == 2:
+                if isinstance(rv[1], (Headers, dict, tuple, list)):
+                    rv, headers = rv  # pyright: ignore
+                else:
+                    rv, status = rv  # type: ignore[assignment,misc]
+            # other sized tuples are not allowed
+            else:
+                raise TypeError(
+                    "The view function did not return a valid response tuple."
+                    " The tuple must have the form (body, status, headers),"
+                    " (body, status), or (body, headers)."
+                )
+
+        return rv, status, headers
+
+    def _coerce_response_value(
+        self,
+        rv: ft.ResponseReturnValue,
+        status: int | None,
+        headers: HeadersValue | None,
+    ) -> tuple[Response, int | None, HeadersValue | None]:
+        """Coerce a response return value into ``self.response_class``."""
+        # Refactoring type: Extract Method.
+        # Isolated response coercion strategy chain from make_response().
+        if rv is None:
+            raise TypeError(
+                f"The view function for {request.endpoint!r} did not"
+                " return a valid response. The function either returned"
+                " None or ended without a return statement."
+            )
+
+        # make sure the body is an instance of the response class
+        if not isinstance(rv, self.response_class):
+            if isinstance(rv, (str, bytes, bytearray)) or isinstance(rv, cabc.Iterator):
+                # let the response class set the status and headers instead of
+                # waiting to do it manually, so that the class can handle any
+                # special logic
+                rv = self.response_class(
+                    rv,  # pyright: ignore
+                    status=status,
+                    headers=headers,  # type: ignore[arg-type]
+                )
+                status = headers = None
+            elif isinstance(rv, (dict, list)):
+                rv = self.json.response(rv)
+            elif isinstance(rv, BaseResponse) or callable(rv):
+                # evaluate a WSGI callable, or coerce a different response
+                # class to the correct type
+                try:
+                    rv = self.response_class.force_type(
+                        rv,  # type: ignore[arg-type]
+                        request.environ,
+                    )
+                except TypeError as e:
+                    raise TypeError(
+                        f"{e}\nThe view function did not return a valid"
+                        " response. The return type must be a string,"
+                        " dict, list, tuple with headers or status,"
+                        " Response instance, or WSGI callable, but it"
+                        f" was a {type(rv).__name__}."
+                    ).with_traceback(sys.exc_info()[2]) from None
+            else:
+                raise TypeError(
+                    "The view function did not return a valid"
+                    " response. The return type must be a string,"
+                    " dict, list, tuple with headers or status,"
+                    " Response instance, or WSGI callable, but it was a"
+                    f" {type(rv).__name__}."
+                )
+
+        return t.cast(Response, rv), status, headers
+
     def make_response(self, rv: ft.ResponseReturnValue) -> Response:
         """Convert the return value from a view function to an instance of
         :attr:`response_class`.
@@ -1278,78 +1385,8 @@ class Flask(App):
            response object.
         """
 
-        status: int | None = None
-        headers: HeadersValue | None = None
-
-        # unpack tuple returns
-        if isinstance(rv, tuple):
-            len_rv = len(rv)
-
-            # a 3-tuple is unpacked directly
-            if len_rv == 3:
-                rv, status, headers = rv  # type: ignore[misc]
-            # decide if a 2-tuple has status or headers
-            elif len_rv == 2:
-                if isinstance(rv[1], (Headers, dict, tuple, list)):
-                    rv, headers = rv  # pyright: ignore
-                else:
-                    rv, status = rv  # type: ignore[assignment,misc]
-            # other sized tuples are not allowed
-            else:
-                raise TypeError(
-                    "The view function did not return a valid response tuple."
-                    " The tuple must have the form (body, status, headers),"
-                    " (body, status), or (body, headers)."
-                )
-
-        # the body must not be None
-        if rv is None:
-            raise TypeError(
-                f"The view function for {request.endpoint!r} did not"
-                " return a valid response. The function either returned"
-                " None or ended without a return statement."
-            )
-
-        # make sure the body is an instance of the response class
-        if not isinstance(rv, self.response_class):
-            if isinstance(rv, (str, bytes, bytearray)) or isinstance(rv, cabc.Iterator):
-                # let the response class set the status and headers instead of
-                # waiting to do it manually, so that the class can handle any
-                # special logic
-                rv = self.response_class(
-                    rv,  # pyright: ignore
-                    status=status,
-                    headers=headers,  # type: ignore[arg-type]
-                )
-                status = headers = None
-            elif isinstance(rv, (dict, list)):
-                rv = self.json.response(rv)
-            elif isinstance(rv, BaseResponse) or callable(rv):
-                # evaluate a WSGI callable, or coerce a different response
-                # class to the correct type
-                try:
-                    rv = self.response_class.force_type(
-                        rv,  # type: ignore[arg-type]
-                        request.environ,
-                    )
-                except TypeError as e:
-                    raise TypeError(
-                        f"{e}\nThe view function did not return a valid"
-                        " response. The return type must be a string,"
-                        " dict, list, tuple with headers or status,"
-                        " Response instance, or WSGI callable, but it"
-                        f" was a {type(rv).__name__}."
-                    ).with_traceback(sys.exc_info()[2]) from None
-            else:
-                raise TypeError(
-                    "The view function did not return a valid"
-                    " response. The return type must be a string,"
-                    " dict, list, tuple with headers or status,"
-                    " Response instance, or WSGI callable, but it was a"
-                    f" {type(rv).__name__}."
-                )
-
-        rv = t.cast(Response, rv)
+        rv, status, headers = self._unpack_response_tuple(rv)
+        rv, status, headers = self._coerce_response_value(rv, status, headers)
         # prefer the status if it was provided
         if status is not None:
             if isinstance(status, (str, bytes, bytearray)):
