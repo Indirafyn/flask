@@ -137,11 +137,13 @@ def _render(ctx: AppContext, template: Template, context: dict[str, t.Any]) -> s
 def _get_selected_template(
     ctx: AppContext, template_name_or_list: str | Template | list[str | Template]
 ) -> Template:
+    """Select a template by name or first existing item from a list."""
     # Refactoring type: Consolidate Duplicate Code. Shared template selection flow.
     return ctx.app.jinja_env.get_or_select_template(template_name_or_list)
 
 
 def _get_string_template(ctx: AppContext, source: str) -> Template:
+    """Create a template object from a source string."""
     # Refactoring type: Consolidate Duplicate Code. Shared string-template flow.
     return ctx.app.jinja_env.from_string(source)
 

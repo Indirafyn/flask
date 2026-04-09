@@ -120,6 +120,7 @@ def _call_factory_with_args(
     args: tuple[t.Any, ...] = (),
     kwargs: dict[str, t.Any] | None = None,
 ) -> t.Any:
+    """Call an app factory and normalize wrong-argument TypeError handling."""
     # Refactoring type: Extract Method.
     # Centralized duplicated factory-call error handling.
     if kwargs is None:

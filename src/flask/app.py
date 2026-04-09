@@ -632,6 +632,7 @@ class Flask(App):
     def _configure_run_debug(
         self, *, load_dotenv: bool, debug: bool | None
     ) -> None:
+        """Resolve debug state for ``run`` from dotenv/env and explicit argument."""
         # Refactoring type: Extract Method. Isolated debug resolution for run().
         if get_load_dotenv(load_dotenv):
             cli.load_dotenv()
@@ -647,6 +648,7 @@ class Flask(App):
     def _resolve_run_host_port(
         self, host: str | None, port: int | None
     ) -> tuple[str, int]:
+        """Resolve host and port defaults for ``run`` using SERVER_NAME fallback."""
         # Refactoring type: Extract Method. Isolated host/port selection for run().
         server_name = self.config.get("SERVER_NAME")
         sn_host = sn_port = None
@@ -670,6 +672,7 @@ class Flask(App):
         return host, port
 
     def _set_run_defaults(self, options: dict[str, t.Any]) -> None:
+        """Apply default development server options for ``run``."""
         # Refactoring type: Extract Method. Isolated default server options for run().
         options.setdefault("use_reloader", self.debug)
         options.setdefault("use_debugger", self.debug)
@@ -1240,6 +1243,7 @@ class Flask(App):
     def _unpack_response_tuple(
         self, rv: ft.ResponseReturnValue
     ) -> tuple[ft.ResponseReturnValue, int | None, HeadersValue | None]:
+        """Unpack a response tuple into body, status, and headers parts."""
         # Refactoring type: Extract Method.
         # Isolated tuple-unpacking branch from make_response().
         status: int | None = None
@@ -1273,6 +1277,7 @@ class Flask(App):
         status: int | None,
         headers: HeadersValue | None,
     ) -> tuple[Response, int | None, HeadersValue | None]:
+        """Coerce a response return value into ``self.response_class``."""
         # Refactoring type: Extract Method.
         # Isolated response coercion strategy chain from make_response().
         if rv is None:
