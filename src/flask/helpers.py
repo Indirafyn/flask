@@ -17,7 +17,6 @@ from werkzeug.wrappers import Response as BaseResponse
 from .globals import _cv_app
 from .globals import app_ctx
 from .globals import current_app
-from .globals import request
 from .globals import session
 from .signals import message_flashed
 
@@ -525,10 +524,11 @@ def send_file(
 
     .. versionadded:: 0.2
     """
+    # Refactoring type: Simplify Data Flow. Removed redundant `environ` forwarding;
+    # `_prepare_send_file_kwargs` always provides request environ from context.
     return werkzeug.utils.send_file(  # type: ignore[return-value]
         **_prepare_send_file_kwargs(
             path_or_file=path_or_file,
-            environ=request.environ,
             mimetype=mimetype,
             as_attachment=as_attachment,
             download_name=download_name,

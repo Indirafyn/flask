@@ -68,21 +68,17 @@ def find_best_app(module: ModuleType) -> Flask:
         app_factory = getattr(module, attr_name, None)
 
         if inspect.isfunction(app_factory):
-            try:
-                app = app_factory()
-
-                if isinstance(app, Flask):
-                    return app
-            except TypeError as e:
-                if not _called_with_wrong_args(app_factory):
-                    raise
-
-                raise NoAppException(
+            app = _call_factory_with_args(
+                app_factory,
+                error_message=(
                     f"Detected factory '{attr_name}' in module '{module.__name__}',"
                     " but could not call it without arguments. Use"
                     f" '{module.__name__}:{attr_name}(args)'"
                     " to specify arguments."
-                ) from e
+                ),
+            )
+            if isinstance(app, Flask):
+                return app
 
     raise NoAppException(
         "Failed to find Flask application or factory in module"
@@ -115,6 +111,26 @@ def _called_with_wrong_args(f: t.Callable[..., Flask]) -> bool:
         # Delete tb to break a circular reference.
         # https://docs.python.org/2/library/sys.html#sys.exc_info
         del tb
+
+
+def _call_factory_with_args(
+    app_factory: t.Callable[..., t.Any],
+    *,
+    error_message: str,
+    args: tuple[t.Any, ...] = (),
+    kwargs: dict[str, t.Any] | None = None,
+) -> t.Any:
+    # Refactoring type: Extract Method. Centralized duplicated factory-call error handling.
+    if kwargs is None:
+        kwargs = {}
+
+    try:
+        return app_factory(*args, **kwargs)
+    except TypeError as e:
+        if not _called_with_wrong_args(app_factory):
+            raise
+
+        raise NoAppException(error_message) from e
 
 
 def find_app_by_string(module: ModuleType, app_name: str) -> Flask:
@@ -174,17 +190,16 @@ def find_app_by_string(module: ModuleType, app_name: str) -> Flask:
     # If the attribute is a function, call it with any args and kwargs
     # to get the real application.
     if inspect.isfunction(attr):
-        try:
-            app = attr(*args, **kwargs)
-        except TypeError as e:
-            if not _called_with_wrong_args(attr):
-                raise
-
-            raise NoAppException(
+        app = _call_factory_with_args(
+            attr,
+            error_message=(
                 f"The factory {app_name!r} in module"
                 f" {module.__name__!r} could not be called with the"
                 " specified arguments."
-            ) from e
+            ),
+            args=tuple(args),
+            kwargs=kwargs,
+        )
     else:
         app = attr
 

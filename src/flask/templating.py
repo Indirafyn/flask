@@ -68,7 +68,7 @@ class DispatchingJinjaLoader(BaseLoader):
         rv: tuple[str, str | None, t.Callable[[], bool] | None] | None
         trv: None | (tuple[str, str | None, t.Callable[[], bool] | None]) = None
 
-        for srcobj, loader in self._iter_loaders(template):
+        for srcobj, loader in self._iter_loaders():
             try:
                 rv = loader.get_source(environment, template)
                 if trv is None:
@@ -88,14 +88,15 @@ class DispatchingJinjaLoader(BaseLoader):
     def _get_source_fast(
         self, environment: BaseEnvironment, template: str
     ) -> tuple[str, str | None, t.Callable[[], bool] | None]:
-        for _srcobj, loader in self._iter_loaders(template):
+        for _srcobj, loader in self._iter_loaders():
             try:
                 return loader.get_source(environment, template)
             except TemplateNotFound:
                 continue
         raise TemplateNotFound(template)
 
-    def _iter_loaders(self, template: str) -> t.Iterator[tuple[Scaffold, BaseLoader]]:
+    def _iter_loaders(self) -> t.Iterator[tuple[Scaffold, BaseLoader]]:
+        # Refactoring type: Remove Parameter. Removed unused `template` argument.
         loader = self.app.jinja_loader
         if loader is not None:
             yield self.app, loader
@@ -133,6 +134,18 @@ def _render(ctx: AppContext, template: Template, context: dict[str, t.Any]) -> s
     return rv
 
 
+def _get_selected_template(
+    ctx: AppContext, template_name_or_list: str | Template | list[str | Template]
+) -> Template:
+    # Refactoring type: Consolidate Duplicate Code. Shared template selection flow.
+    return ctx.app.jinja_env.get_or_select_template(template_name_or_list)
+
+
+def _get_string_template(ctx: AppContext, source: str) -> Template:
+    # Refactoring type: Consolidate Duplicate Code. Shared string-template flow.
+    return ctx.app.jinja_env.from_string(source)
+
+
 def render_template(
     template_name_or_list: str | Template | list[str | Template],
     **context: t.Any,
@@ -144,7 +157,7 @@ def render_template(
     :param context: The variables to make available in the template.
     """
     ctx = app_ctx._get_current_object()
-    template = ctx.app.jinja_env.get_or_select_template(template_name_or_list)
+    template = _get_selected_template(ctx, template_name_or_list)
     return _render(ctx, template, context)
 
 
@@ -156,7 +169,7 @@ def render_template_string(source: str, **context: t.Any) -> str:
     :param context: The variables to make available in the template.
     """
     ctx = app_ctx._get_current_object()
-    template = ctx.app.jinja_env.from_string(source)
+    template = _get_string_template(ctx, source)
     return _render(ctx, template, context)
 
 
@@ -193,7 +206,7 @@ def stream_template(
     .. versionadded:: 2.2
     """
     ctx = app_ctx._get_current_object()
-    template = ctx.app.jinja_env.get_or_select_template(template_name_or_list)
+    template = _get_selected_template(ctx, template_name_or_list)
     return _stream(ctx, template, context)
 
 
@@ -208,5 +221,5 @@ def stream_template_string(source: str, **context: t.Any) -> t.Iterator[str]:
     .. versionadded:: 2.2
     """
     ctx = app_ctx._get_current_object()
-    template = ctx.app.jinja_env.from_string(source)
+    template = _get_string_template(ctx, source)
     return _stream(ctx, template, context)
