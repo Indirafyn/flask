@@ -462,6 +462,18 @@ class AppContext:
         .. versionchanged:: 0.9
             Added the ``exc`` argument.
         """
+        self._check_pop()
+
+        self._push_count -= 1
+
+        if self._push_count > 0:
+            return
+
+        self._teardown(exc)
+
+    def _check_pop(self) -> None:
+        # Refactoring (Extract Method): isolate context-state guard clauses
+        # from the ordered teardown lifecycle.
         if self._cv_token is None:
             raise RuntimeError(f"Cannot pop this context ({self!r}), it is not pushed.")
 
@@ -478,11 +490,9 @@ class AppContext:
                 f" context ({ctx!r})."
             )
 
-        self._push_count -= 1
-
-        if self._push_count > 0:
-            return
-
+    def _teardown(self, exc: BaseException | None) -> None:
+        # Refactoring (Extract Method): preserve the existing teardown order
+        # while making the cleanup phase independently readable.
         collect_errors = _CollectErrors()
 
         if self._request is not None:
@@ -495,7 +505,9 @@ class AppContext:
         with collect_errors:
             self.app.do_teardown_appcontext(self, exc)
 
-        _cv_app.reset(self._cv_token)
+        token = self._cv_token
+        assert token is not None
+        _cv_app.reset(token)
         self._cv_token = None
 
         with collect_errors:
