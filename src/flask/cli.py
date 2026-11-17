@@ -38,6 +38,39 @@ class NoAppException(click.UsageError):
     """Raised if an application cannot be found or loaded."""
 
 
+def _parse_app_name(app_name: str) -> tuple[str, list[t.Any], dict[str, t.Any]]:
+    # Refactoring (Extract Method): isolate AST parsing and literal argument
+    # extraction from module lookup and application validation.
+    try:
+        expr = ast.parse(app_name.strip(), mode="eval").body
+    except SyntaxError:
+        raise NoAppException(
+            f"Failed to parse {app_name!r} as an attribute name or function call."
+        ) from None
+
+    if isinstance(expr, ast.Name):
+        return expr.id, [], {}
+
+    if not isinstance(expr, ast.Call) or not isinstance(expr.func, ast.Name):
+        raise NoAppException(
+            f"Failed to parse {app_name!r} as an attribute name or function call."
+        )
+
+    try:
+        args = [ast.literal_eval(arg) for arg in expr.args]
+        kwargs = {
+            kw.arg: ast.literal_eval(kw.value)
+            for kw in expr.keywords
+            if kw.arg is not None
+        }
+    except ValueError:
+        raise NoAppException(
+            f"Failed to parse arguments as literal values: {app_name!r}."
+        ) from None
+
+    return expr.func.id, args, kwargs
+
+
 def find_best_app(module: ModuleType) -> Flask:
     """Given a module instance this tries to find the best possible
     application in the module or raises an exception.
@@ -123,46 +156,7 @@ def find_app_by_string(module: ModuleType, app_name: str) -> Flask:
     """
     from . import Flask
 
-    # Parse app_name as a single expression to determine if it's a valid
-    # attribute name or function call.
-    try:
-        expr = ast.parse(app_name.strip(), mode="eval").body
-    except SyntaxError:
-        raise NoAppException(
-            f"Failed to parse {app_name!r} as an attribute name or function call."
-        ) from None
-
-    if isinstance(expr, ast.Name):
-        name = expr.id
-        args = []
-        kwargs = {}
-    elif isinstance(expr, ast.Call):
-        # Ensure the function name is an attribute name only.
-        if not isinstance(expr.func, ast.Name):
-            raise NoAppException(
-                f"Function reference must be a simple name: {app_name!r}."
-            )
-
-        name = expr.func.id
-
-        # Parse the positional and keyword arguments as literals.
-        try:
-            args = [ast.literal_eval(arg) for arg in expr.args]
-            kwargs = {
-                kw.arg: ast.literal_eval(kw.value)
-                for kw in expr.keywords
-                if kw.arg is not None
-            }
-        except ValueError:
-            # literal_eval gives cryptic error messages, show a generic
-            # message with the full expression instead.
-            raise NoAppException(
-                f"Failed to parse arguments as literal values: {app_name!r}."
-            ) from None
-    else:
-        raise NoAppException(
-            f"Failed to parse {app_name!r} as an attribute name or function call."
-        )
+    name, args, kwargs = _parse_app_name(app_name)
 
     try:
         attr = getattr(module, name)

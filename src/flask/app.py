@@ -76,6 +76,60 @@ def _make_timedelta(value: timedelta | int | None) -> timedelta | None:
     return timedelta(seconds=value)
 
 
+def _unpack_response_tuple(
+    rv: ft.ResponseReturnValue,
+) -> tuple[t.Any, int | None, HeadersValue | None]:
+    # Refactoring (Extract Method): isolate tuple-return validation from
+    # response object conversion.
+    status: int | None = None
+    headers: HeadersValue | None = None
+
+    if isinstance(rv, tuple):
+        len_rv = len(rv)
+
+        if len_rv == 3:
+            rv, status, headers = rv  # type: ignore[misc]
+        elif len_rv == 2:
+            if isinstance(rv[1], (Headers, dict, tuple, list)):
+                rv, headers = rv  # pyright: ignore
+            else:
+                rv, status = rv  # type: ignore[assignment,misc]
+        else:
+            raise TypeError(
+                "The view function did not return a valid response tuple."
+                " The tuple must have the form (body, status, headers),"
+                " (body, status), or (body, headers)."
+            )
+
+    return rv, status, headers
+
+
+def _get_run_host_port(
+    config: cabc.Mapping[str, t.Any], host: str | None, port: int | None
+) -> tuple[str, int]:
+    # Refactoring (Extract Method): isolate SERVER_NAME parsing and default
+    # host/port selection from development-server lifecycle setup.
+    server_name = config.get("SERVER_NAME")
+    sn_host = sn_port = None
+
+    if server_name:
+        server_url = urlsplit(f"//{server_name}")
+        sn_host = server_url.hostname
+        sn_port = server_url.port
+
+    if not host:
+        host = sn_host or "127.0.0.1"
+
+    if port or port == 0:
+        port = int(port)
+    elif sn_port is not None:
+        port = sn_port
+    else:
+        port = 5000
+
+    return host, port
+
+
 F = t.TypeVar("F", bound=t.Callable[..., t.Any])
 
 
@@ -726,26 +780,7 @@ class Flask(App):
         if debug is not None:
             self.debug = bool(debug)
 
-        server_name = self.config.get("SERVER_NAME")
-        sn_host = sn_port = None
-
-        if server_name:
-            server_url = urlsplit(f"//{server_name}")
-            sn_host = server_url.hostname
-            sn_port = server_url.port
-
-        if not host:
-            if sn_host:
-                host = sn_host
-            else:
-                host = "127.0.0.1"
-
-        if port or port == 0:
-            port = int(port)
-        elif sn_port is not None:
-            port = sn_port
-        else:
-            port = 5000
+        host, port = _get_run_host_port(self.config, host, port)
 
         options.setdefault("use_reloader", self.debug)
         options.setdefault("use_debugger", self.debug)
@@ -1142,6 +1177,44 @@ class Flask(App):
 
         return asgiref_async_to_sync(func)
 
+    def _prepare_url_for(
+        self, endpoint: str, external: bool | None, scheme: str | None
+    ) -> tuple[str, MapAdapter | None, bool]:
+        # Refactoring (Extract Method): isolate context-dependent adapter
+        # selection and external URL defaults from URL building.
+        ctx = _cv_app.get(None)
+
+        if ctx is not None and ctx.has_request:
+            url_adapter = ctx.url_adapter
+            blueprint_name = ctx.request.blueprint
+
+            if endpoint[:1] == ".":
+                if blueprint_name is not None:
+                    endpoint = f"{blueprint_name}{endpoint}"
+                else:
+                    endpoint = endpoint[1:]
+
+            if external is None:
+                external = scheme is not None
+        else:
+            if ctx is not None:
+                url_adapter = ctx.url_adapter
+            else:
+                url_adapter = self.create_url_adapter(None)
+
+            if url_adapter is None:
+                raise RuntimeError(
+                    "Unable to build URLs outside an active request"
+                    " without 'SERVER_NAME' configured. Also configure"
+                    " 'APPLICATION_ROOT' and 'PREFERRED_URL_SCHEME' as"
+                    " needed."
+                )
+
+            if external is None:
+                external = True
+
+        return endpoint, url_adapter, external
+
     def url_for(
         self,
         /,
@@ -1199,43 +1272,9 @@ class Flask(App):
         .. versionadded:: 2.2
             Moved from ``flask.url_for``, which calls this method.
         """
-        if (ctx := _cv_app.get(None)) is not None and ctx.has_request:
-            url_adapter = ctx.url_adapter
-            blueprint_name = ctx.request.blueprint
-
-            # If the endpoint starts with "." and the request matches a
-            # blueprint, the endpoint is relative to the blueprint.
-            if endpoint[:1] == ".":
-                if blueprint_name is not None:
-                    endpoint = f"{blueprint_name}{endpoint}"
-                else:
-                    endpoint = endpoint[1:]
-
-            # When in a request, generate a URL without scheme and
-            # domain by default, unless a scheme is given.
-            if _external is None:
-                _external = _scheme is not None
-        else:
-            # If called by helpers.url_for, an app context is active,
-            # use its url_adapter. Otherwise, app.url_for was called
-            # directly, build an adapter.
-            if ctx is not None:
-                url_adapter = ctx.url_adapter
-            else:
-                url_adapter = self.create_url_adapter(None)
-
-            if url_adapter is None:
-                raise RuntimeError(
-                    "Unable to build URLs outside an active request"
-                    " without 'SERVER_NAME' configured. Also configure"
-                    " 'APPLICATION_ROOT' and 'PREFERRED_URL_SCHEME' as"
-                    " needed."
-                )
-
-            # When outside a request, generate a URL with scheme and
-            # domain by default.
-            if _external is None:
-                _external = True
+        endpoint, url_adapter, _external = self._prepare_url_for(
+            endpoint, _external, _scheme
+        )
 
         # It is an error to set _scheme when _external=False, in order
         # to avoid accidental insecure URLs.
@@ -1321,29 +1360,7 @@ class Flask(App):
            response object.
         """
 
-        status: int | None = None
-        headers: HeadersValue | None = None
-
-        # unpack tuple returns
-        if isinstance(rv, tuple):
-            len_rv = len(rv)
-
-            # a 3-tuple is unpacked directly
-            if len_rv == 3:
-                rv, status, headers = rv  # type: ignore[misc]
-            # decide if a 2-tuple has status or headers
-            elif len_rv == 2:
-                if isinstance(rv[1], (Headers, dict, tuple, list)):
-                    rv, headers = rv  # pyright: ignore
-                else:
-                    rv, status = rv  # type: ignore[assignment,misc]
-            # other sized tuples are not allowed
-            else:
-                raise TypeError(
-                    "The view function did not return a valid response tuple."
-                    " The tuple must have the form (body, status, headers),"
-                    " (body, status), or (body, headers)."
-                )
+        rv, status, headers = _unpack_response_tuple(rv)
 
         # the body must not be None
         if rv is None:
@@ -1353,14 +1370,30 @@ class Flask(App):
                 " None or ended without a return statement."
             )
 
-        # make sure the body is an instance of the response class
+        rv, status, headers = self._coerce_response(rv, status, headers)
+
+        # prefer the status if it was provided
+        if status is not None:
+            if isinstance(status, (str, bytes, bytearray)):
+                rv.status = status
+            else:
+                rv.status_code = status
+
+        # extend existing headers with provided headers
+        if headers:
+            rv.headers.update(headers)
+
+        return rv
+
+    def _coerce_response(
+        self, rv: t.Any, status: int | None, headers: HeadersValue | None
+    ) -> tuple[Response, int | None, HeadersValue | None]:
+        # Refactoring (Decompose Conditional): isolate response type dispatch
+        # from tuple unpacking and final status/header application.
         if not isinstance(rv, self.response_class):
             if isinstance(rv, (str, bytes, bytearray)) or isinstance(rv, cabc.Iterator):
-                # let the response class set the status and headers instead of
-                # waiting to do it manually, so that the class can handle any
-                # special logic
                 rv = self.response_class(
-                    rv,
+                    rv,  # type: ignore[arg-type]
                     status=status,
                     headers=headers,  # type: ignore[arg-type]
                 )
@@ -1368,13 +1401,8 @@ class Flask(App):
             elif isinstance(rv, (dict, list)):
                 rv = self.json.response(rv)
             elif isinstance(rv, BaseResponse) or callable(rv):
-                # evaluate a WSGI callable, or coerce a different response
-                # class to the correct type
                 try:
-                    rv = self.response_class.force_type(
-                        rv,  # type: ignore[arg-type]
-                        request.environ,
-                    )
+                    rv = self.response_class.force_type(rv, request.environ)
                 except TypeError as e:
                     raise TypeError(
                         f"{e}\nThe view function did not return a valid"
@@ -1392,19 +1420,7 @@ class Flask(App):
                     f" {type(rv).__name__}."
                 )
 
-        rv = t.cast(Response, rv)
-        # prefer the status if it was provided
-        if status is not None:
-            if isinstance(status, (str, bytes, bytearray)):
-                rv.status = status
-            else:
-                rv.status_code = status
-
-        # extend existing headers with provided headers
-        if headers:
-            rv.headers.update(headers)
-
-        return rv
+        return t.cast(Response, rv), status, headers
 
     def preprocess_request(self, ctx: AppContext) -> ft.ResponseReturnValue | None:
         """Called before the request is dispatched. Calls

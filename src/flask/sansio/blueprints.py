@@ -347,34 +347,45 @@ class Blueprint(Scaffold):
                 app.cli.add_command(self.cli)
 
         for blueprint, bp_options in self._blueprints:
-            bp_options = bp_options.copy()
-            bp_url_prefix = bp_options.get("url_prefix")
-            bp_subdomain = bp_options.get("subdomain")
-
-            if bp_subdomain is None:
-                bp_subdomain = blueprint.subdomain
-
-            if state.subdomain is not None and bp_subdomain is not None:
-                bp_options["subdomain"] = bp_subdomain + "." + state.subdomain
-            elif bp_subdomain is not None:
-                bp_options["subdomain"] = bp_subdomain
-            elif state.subdomain is not None:
-                bp_options["subdomain"] = state.subdomain
-
-            if bp_url_prefix is None:
-                bp_url_prefix = blueprint.url_prefix
-
-            if state.url_prefix is not None and bp_url_prefix is not None:
-                bp_options["url_prefix"] = (
-                    state.url_prefix.rstrip("/") + "/" + bp_url_prefix.lstrip("/")
-                )
-            elif bp_url_prefix is not None:
-                bp_options["url_prefix"] = bp_url_prefix
-            elif state.url_prefix is not None:
-                bp_options["url_prefix"] = state.url_prefix
-
+            bp_options = self._prepare_nested_options(state, blueprint, bp_options)
             bp_options["name_prefix"] = name
             blueprint.register(app, bp_options)
+
+    def _prepare_nested_options(
+        self,
+        state: BlueprintSetupState,
+        blueprint: Blueprint,
+        options: dict[str, t.Any],
+    ) -> dict[str, t.Any]:
+        # Refactoring (Extract Method): isolate nested blueprint URL and
+        # subdomain composition from the main registration workflow.
+        options = options.copy()
+        bp_url_prefix = options.get("url_prefix")
+        bp_subdomain = options.get("subdomain")
+
+        if bp_subdomain is None:
+            bp_subdomain = blueprint.subdomain
+
+        if state.subdomain is not None and bp_subdomain is not None:
+            options["subdomain"] = bp_subdomain + "." + state.subdomain
+        elif bp_subdomain is not None:
+            options["subdomain"] = bp_subdomain
+        elif state.subdomain is not None:
+            options["subdomain"] = state.subdomain
+
+        if bp_url_prefix is None:
+            bp_url_prefix = blueprint.url_prefix
+
+        if state.url_prefix is not None and bp_url_prefix is not None:
+            options["url_prefix"] = (
+                state.url_prefix.rstrip("/") + "/" + bp_url_prefix.lstrip("/")
+            )
+        elif bp_url_prefix is not None:
+            options["url_prefix"] = bp_url_prefix
+        elif state.url_prefix is not None:
+            options["url_prefix"] = state.url_prefix
+
+        return options
 
     def _merge_blueprint_funcs(self, app: App, name: str) -> None:
         def extend(

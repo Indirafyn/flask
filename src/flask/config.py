@@ -47,6 +47,27 @@ class ConfigAttribute(t.Generic[T]):
         obj.config[self.__name__] = value
 
 
+def _set_prefixed_value(
+    config: dict[str, t.Any], key: str, value: t.Any
+) -> None:
+    # Refactoring (Extract Method): isolate nested environment-key mutation
+    # from environment scanning and value decoding.
+    if "__" not in key:
+        config[key] = value
+        return
+
+    current: dict[str, t.Any] = config
+    *parts, tail = key.split("__")
+
+    for part in parts:
+        if part not in current:
+            current[part] = {}
+
+        current = current[part]
+
+    current[tail] = value
+
+
 class Config(dict):  # type: ignore[type-arg]
     """Works exactly like a dict but provides ways to fill it from files
     or special dictionaries.  There are two common patterns to populate the
@@ -164,23 +185,7 @@ class Config(dict):  # type: ignore[type-arg]
                 # Keep the value as a string if loading failed.
                 pass
 
-            if "__" not in key:
-                # A non-nested key, set directly.
-                self[key] = value
-                continue
-
-            # Traverse nested dictionaries with keys separated by "__".
-            current = self
-            *parts, tail = key.split("__")
-
-            for part in parts:
-                # If an intermediate dict does not exist, create it.
-                if part not in current:
-                    current[part] = {}
-
-                current = current[part]
-
-            current[tail] = value
+            _set_prefixed_value(self, key, value)
 
         return True
 
